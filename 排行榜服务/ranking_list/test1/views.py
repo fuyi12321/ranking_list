@@ -1,3 +1,4 @@
+#coding:utf8
 from django.shortcuts import render, redirect, reverse
 from django.http import HttpResponse
 from django.views import View
@@ -10,13 +11,12 @@ from .models import ScoreModel
 import datetime
 import pytz
 import re
+from .rank import RanklistBase as Ranklist
+import redis
+r = redis.Redis("127.0.0.1", 6379, 0)
+
 
 # Create your views here.
-@login_required
-def index(request):
-    return render(request, 'test1/home.html')
-
-
 def home(request):
     username = request.user
     return render(request, 'test1/home.html', context={'username': username})
@@ -74,6 +74,7 @@ def logoutTest(request):
 
 
 # 选择接口
+@login_required
 def choose(request):
     return render(request, 'test1/choose.html')
 
@@ -86,57 +87,65 @@ class CreateScore(View):
 
     def post(self, request):
         username = request.user
-        score = int(request.POST.get('score'))
+        score = request.POST.get('score')
         user = User.objects.filter(username=username).first()
-        # 如果分数异常
-        if score not in range(1, 10000000):
-            return HttpResponse('分数数据异常')
-        else:
-            score_user = ScoreModel.objects.filter(user_id=user.id)
-            # 如果用户没有填过分数，就创建
-            if not score_user:
-                ScoreModel.objects.create(score=score, user_id=user.id)
-                return redirect('choose')
-            # 如果用户填过，就更新
+        ret = re.match('^[0-9]+$', score)
+        if ret:
+            # 如果分数异常
+            score = int(score)
+            if score not in range(1, 10000000):
+                return HttpResponse('分数数据异常')
             else:
-                # 如果记录不存在的话，它会报错。
-                scores = ScoreModel.objects.get(user_id=user.id)
-                now_datetime = datetime.datetime.now().replace(tzinfo=pytz.timezone('UTC'))
-                if scores.datetime - now_datetime < datetime.timedelta(seconds=1):
-                    scores.score = score
-                    scores.save()
-                    return HttpResponse('分数更新成功')
+                score_user = ScoreModel.objects.filter(user_id=user.id)
+                # 如果用户没有填过分数，就创建
+                if not score_user:
+                    ScoreModel.objects.create(score=score, user_id=user.id)
+                    return redirect('choose')
+                # 如果用户填过，就更新
                 else:
-                    return HttpResponse('时间异常')
+                    # 如果记录不存在的话，它会报错。
+                    scores = ScoreModel.objects.get(user_id=user.id)
+                    now_datetime = datetime.datetime.now().replace(tzinfo=pytz.timezone('UTC'))
+                    if scores.datetime - now_datetime < datetime.timedelta(seconds=1):
+                        scores.score = score
+                        scores.save()
+                        return HttpResponse('分数更新成功')
+                    else:
+                        return HttpResponse('时间异常')
+        else:
+            return HttpResponse('分数数据异常')
 
 
 # 查询排行榜
 class SearchRanking(View):
-    @method_decorator(login_required())
     def get(self, request):
         return render(request, 'test1/search.html')
 
     def post(self, request):
         username = request.user
         user = User.objects.filter(username=username).first()
-        my_score = ScoreModel.objects.get(user_id=user.id)
         ranges = request.POST.get('ranges')
-        pattern = re.compile(r'^[0-9]?\d-[0-9]?\d$')
-        ret = re.match(pattern, ranges)
-
+        ret = re.match(r'^[0-9]?\d-[0-9]?\d$', ranges)
+        data = ScoreModel.objects.all().values()
+        rk = Ranklist('redis_cache', r)
+        for item in list(data):
+            rk.push_in(item)
+        rk.sort_by("score").add_rank('score')
+        my_rank = rk.about_me(user.id)
         context = {
             'user': user,
-            'myScore': my_score
+            'myScore': my_rank
         }
         if ranges == '':
-            data = ScoreModel.objects.order_by('-score')[:10]
+            data = rk.top(10)
             context['specified'] = data
         else:
             if ret:
                 range_left = int(ranges.split('-')[0]) - 1
                 range_right = int(ranges.split('-')[1])
                 if range_left < range_right:
-                    data = ScoreModel.objects.order_by('-score')[range_left: range_right]
+                    # data = ScoreModel.objects.order_by('-score')[range_left: range_right]
+                    data = rk.range(range_left, range_right)
                     context['specified'] = data
                     context['rank_start'] = range_left
                 else:
