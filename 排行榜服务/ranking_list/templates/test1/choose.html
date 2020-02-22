@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>选择功能</title>
+</head>
+<body>
+  欢迎{{ request.user }}
+  <br>
+  <a href="{% url 'create_score' %}">登记分数</a>
+  <br>
+  <a href="{% url 'search_ranking' %}">查看排行榜</a>
+  <br>
+  <a href="{% url 'logout' %}">退出</a>
+  <br>
+</body>
+</html>
